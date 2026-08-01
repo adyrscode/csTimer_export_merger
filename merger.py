@@ -2,15 +2,15 @@ from pathlib import Path
 import json
 
 files = []
+file_names = []
 
-# look for .txt files in script dir
+# look for .txt files in script 
 script_dir = Path(__file__).parent
 for file in script_dir.iterdir():
     if file.name.endswith(".txt"):
-        files.append(file.name)
-print("Found files:",files)
+        print("Found file:", file.name)
+        files.append(file)
 
-all_dates = {} # dict of all dates by any solve, for fast lookup
 all_properties = []
 sessions_by_event = {} # initial sorting of solves per event
 sorted_sessions = {} # final sessions, sorted by count for rank, and by date for solve.
@@ -18,7 +18,12 @@ sorted_sessions = {} # final sessions, sorted by count for rank, and by date for
 def main():
     for file_num, file in enumerate(files):
         with open(files[file_num], "r") as file:
-            print("Starting file:",files[file_num])
+            # extract file names for nice printing :)
+            s = str(files[file_num])
+            file_name = s[s.rfind("/") + 1:]
+            file_names.append(file_name)
+
+            print("Starting file:",file_name)
             data = json.load(file)
 
             # let's get properties (user settings) out of the way first
@@ -28,14 +33,14 @@ def main():
             all_properties.append([files[file_num], properties])
 
             # go through sessions and sort into events
-            sesh_num = 0
             for session in data:
-                sesh_num += 1
+                sesh_num = session[7:]
                 if (len(data[session]) != 0) and (session != "properties"):
-                    print("Starting",session,"in file",files[file_num])
+                    print("Parsing",session,"in",file_name)
                     parse_session(data[session], str(sesh_num), session_data)
                 else:
-                    print(session, "is empty or irrelevant")
+                    print(session, "is empty or irrelevant in",file_name)
+                    pass
 
     # sort solves per event by date
     counts = [] # [[21343, '3x3']]
@@ -60,56 +65,70 @@ def main():
 
     sorted_sessions["properties"] = {"sessionData":json.dumps(new_session_data)}
 
-    for i, file in enumerate(all_properties, start=1):
-        print(i,". ", file[0], sep="")
-    result = 1
-    while result == 1:
-        result = resolve_properties()
+    for i, file_name in enumerate(file_names, start=1):
+        print(i,". ", file_name, sep="")
 
+    result = 1
+    msg = "Please type the number of the file from which to keep your settings."
+    while result == 1:
+        choice = input(msg)
+        result, msg = resolve_properties(choice)
+    print(msg) # success print
 
 def parse_session(session, sesh_num, session_data):
     sesh_name = session_data[sesh_num]["name"]
+    first_occurance = sesh_name not in sessions_by_event
 
-    if sesh_name not in sessions_by_event: # sesh num should not be definite yet
-        sessions_by_event[sesh_name] = {"data":session_data[sesh_num],"solves":[]}
+    if first_occurance:
+        sessions_by_event[sesh_name] = {"data":session_data[sesh_num],"solves":[],"dates":{}}
 
     # check for each solve if it's not already been added, if not, add
     for solve in session:
         date = solve[3]
 
-        if date not in all_dates:
+        if date not in sessions_by_event[sesh_name]["dates"]:
             sessions_by_event[sesh_name]["solves"].append(solve)
-            all_dates[date] = 0
+            sessions_by_event[sesh_name]["dates"][date] = 0
 
-    resolve_event_data(session_data[sesh_num], sesh_name)
+    if not first_occurance:
+        resolve_event_data(session_data[sesh_num], sesh_name)
 
 def resolve_event_data(b, sesh_name):
     a = sessions_by_event[sesh_name]["data"]
-
-    if len(a) == 0:
-        a = b
-        return
 
     # i've only ever seen scrType in opt, but this should be more nuanced
     if len(a["opt"]) < len(b["opt"]):
         a["opt"] = b["opt"]
 
-    a["stat"][0] += b["stat"][0] # total count
-    a["stat"][2] = (a["stat"][2] + b["stat"][2]) / 2
+    # stat and date are not created with unused sessions. it should be impossible for an unused session to be parsed by this code, but just in case:
+    if ("stat" in a) and ("stat" in b):
+        a_count = a["stat"][0]
+        a_avg = a["stat"][2]
+        b_count = b["stat"][0]
+        b_avg = b["stat"][2]
+        total_count = a_count + b_count
 
-    if a["date"][0] > b["date"][0]: a["date"][0] = b["date"][0]
-    if a["date"][1] < b["date"][1]: a["date"][1] = b["date"][1]
+        combined_avg = (a_avg * a_count + b_avg * b_count) / (total_count) # weighted average
 
-def resolve_properties():
-    choice = input("Please type the number of the file from which to keep your settings.")
+        a["stat"][0] = total_count
+        a["stat"][2] = combined_avg
 
+    elif ("stat" not in a) and ("stat" in b):
+        a["stat"] = b["stat"]
+
+    if ("date" in a) and ("date" in b):
+        if a["date"][0] > b["date"][0]: a["date"][0] = b["date"][0]
+        if a["date"][1] < b["date"][1]: a["date"][1] = b["date"][1]
+        
+    elif ("date" not in a) and ("date" in b):
+        a["date"] = b["date"]
+
+def resolve_properties(choice):
     if not choice.isdigit():
-        print("Please type a number.")
-        return 1
+        return 1, "Please type a number."
 
     elif int(choice) not in range(1, len(all_properties) + 1):
-        print("Please choose one of the options above.")
-        return 1
+        return 1, "Please choose one of the options above."
 
     else:
         user_data = (all_properties[int(choice) - 1][1])
@@ -119,7 +138,7 @@ def resolve_properties():
                 sorted_sessions["properties"][setting] = session_no
             else:
                 sorted_sessions["properties"][setting] = user_data[setting]
-        return 0
+        return 0, "Exporting as 'merged.json'..."
 
 main()
 
